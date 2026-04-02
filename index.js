@@ -87,22 +87,31 @@ async function syncIpWithSpherAAA(manualTrigger = false) {
     await notify(`🚨 IP CHANGE DETECTED!\nLogging in to SpherAAA to update to ${liveIp}...`);
     
     try {
-        // ---> THE FIX: Get OAuth2 Temporary Access Token First <---
+        // ---> THE FIX: SpherAAA Strict OAuth2 Requirements <---
         let token;
         try {
             const payload = new URLSearchParams({
                 'grant_type': 'client_credentials',
                 'client_id': SPHERAAA_CLIENT_ID,
-                'client_secret': SPHERAAA_CLIENT_SECRET
+                'client_secret': SPHERAAA_CLIENT_SECRET,
+                'scope': '' // REQUIRED BY SPHERAAA SWAGGER VALIDATION
             });
             
+            // SpherAAA docs ask for Basic Auth Header as the primary auth method
+            const authHeader = 'Basic ' + Buffer.from(SPHERAAA_CLIENT_ID + ':' + SPHERAAA_CLIENT_SECRET).toString('base64');
+
             const tokenResponse = await axios.post('https://cloud.spheralogic.com/api/token', payload.toString(), {
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                headers: { 
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'Authorization': authHeader
+                },
                 timeout: 10000
             });
             token = tokenResponse.data.access_token;
         } catch (loginError) {
-            await notify(`❌ Auth Failed! Ensure SPHERAAA_CLIENT_SECRET is correct in Render.`, true);
+            // Un-hid the error so SpherAAA tells us EXACTLY what is wrong if it fails
+            const errorMsg = loginError.response ? JSON.stringify(loginError.response.data) : loginError.message;
+            await notify(`❌ Auth Failed! SpherAAA responded with: ${errorMsg}`, true);
             return;
         }
 
