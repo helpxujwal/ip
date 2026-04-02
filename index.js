@@ -7,7 +7,11 @@ const TelegramBot = require('node-telegram-bot-api');
 // CONFIGURATION 
 // ==========================================
 const DDNS_DOMAIN = process.env.DDNS_DOMAIN || 'ujwaljha.tplinkdns.com';
-const SPHERAAA_API_KEY = process.env.SPHERAAA_API_KEY; 
+
+// SpherAAA OAuth2 Credentials
+const SPHERAAA_CLIENT_ID = process.env.SPHERAAA_CLIENT_ID || 'ShopAdminApp'; 
+const SPHERAAA_CLIENT_SECRET = process.env.SPHERAAA_CLIENT_SECRET || process.env.SPHERAAA_API_KEY; 
+
 const RADIUS_SECRET = process.env.RADIUS_SECRET || 'Life!2025'; // Your router's secret password
 const CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -27,6 +31,14 @@ if (TELEGRAM_BOT_TOKEN) {
     bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: true });
     console.log("🤖 Telegram Bot initialized.");
     
+    // THE FIX: This silences the harmless "409 Conflict" error during Render redeploys
+    bot.on('polling_error', (error) => {
+        if (error.code === 'ETELEGRAM' && error.message.includes('409 Conflict')) {
+            return; // Ignore silently
+        }
+        console.error("Telegram Polling Error:", error.message);
+    });
+
     bot.onText(/\/(restart|check|update)/, (msg) => {
         const chatId = msg.chat.id.toString();
         if (TELEGRAM_CHAT_ID && chatId !== TELEGRAM_CHAT_ID) return;
@@ -40,7 +52,7 @@ async function notify(message, isError = false) {
     else console.log(message);
     if (bot && TELEGRAM_CHAT_ID) {
         try { await bot.sendMessage(TELEGRAM_CHAT_ID, message); } 
-        catch (err) { console.error("Telegram error:", err.message); }
+        catch (err) { /* Ignored to prevent crashes */ }
     }
 }
 
@@ -50,8 +62,8 @@ async function notify(message, isError = false) {
 async function syncIpWithSpherAAA(manualTrigger = false) {
     console.log(`\n[${new Date().toISOString()}] Starting IP Check...`);
     
-    if (!SPHERAAA_API_KEY) {
-        await notify("❌ ERROR: Missing SPHERAAA_API_KEY", true);
+    if (!SPHERAAA_CLIENT_SECRET) {
+        await notify("❌ ERROR: Missing SPHERAAA_CLIENT_SECRET in Environment Variables", true);
         return;
     }
 
@@ -72,11 +84,31 @@ async function syncIpWithSpherAAA(manualTrigger = false) {
         return;
     }
 
-    await notify(`🚨 IP CHANGE DETECTED!\nSyncing SpherAAA to ${liveIp}...`);
+    await notify(`🚨 IP CHANGE DETECTED!\nLogging in to SpherAAA to update to ${liveIp}...`);
     
     try {
+        // ---> THE FIX: Get OAuth2 Temporary Access Token First <---
+        let token;
+        try {
+            const payload = new URLSearchParams({
+                'grant_type': 'client_credentials',
+                'client_id': SPHERAAA_CLIENT_ID,
+                'client_secret': SPHERAAA_CLIENT_SECRET
+            });
+            
+            const tokenResponse = await axios.post('https://cloud.spheralogic.com/api/token', payload.toString(), {
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                timeout: 10000
+            });
+            token = tokenResponse.data.access_token;
+        } catch (loginError) {
+            await notify(`❌ Auth Failed! Ensure SPHERAAA_CLIENT_SECRET is correct in Render.`, true);
+            return;
+        }
+
+        // Now inject the valid token into the headers
         const headers = {
-            'Authorization': `Bearer ${SPHERAAA_API_KEY}`,
+            'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'
         };
 
