@@ -94,7 +94,7 @@ async function syncIpWithSpherAAA(manualTrigger = false) {
                 'grant_type': 'client_credentials',
                 'client_id': SPHERAAA_CLIENT_ID,
                 'client_secret': SPHERAAA_CLIENT_SECRET,
-                'scope': '' // REQUIRED BY SPHERAAA SWAGGER VALIDATION
+                'scope': 'splc_nas:read splc_nas:write' // THE FIX: Exactly matching your dashboard scopes
             });
             
             // SpherAAA docs ask for Basic Auth Header as the primary auth method
