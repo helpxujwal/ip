@@ -13,7 +13,7 @@ const SPHERAAA_CLIENT_ID = process.env.SPHERAAA_CLIENT_ID || 'ShopAdminApp';
 const SPHERAAA_CLIENT_SECRET = process.env.SPHERAAA_CLIENT_SECRET || process.env.SPHERAAA_API_KEY; 
 
 const RADIUS_SECRET = process.env.RADIUS_SECRET || 'Life!2025'; // Your router's secret password
-const CHECK_INTERVAL_MS = 60 * 60 * 1000; // THE FIX: Exactly 1 Hour interval
+const CHECK_INTERVAL_MS = 5 * 60 * 1000; // THE FIX: Changed back to exactly 5 Minutes!
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
@@ -31,14 +31,17 @@ if (TELEGRAM_BOT_TOKEN) {
     bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: true });
     console.log("🤖 Telegram Bot initialized.");
     
-    // Silences harmless Render restart conflicts
+    // This silences the harmless "409 Conflict" error during Render redeploys
     bot.on('polling_error', (error) => {
-        if (error.code === 'ETELEGRAM' && error.message.includes('409 Conflict')) return;
+        if (error.code === 'ETELEGRAM' && error.message.includes('409 Conflict')) {
+            return; // Ignore silently
+        }
         console.error("Telegram Polling Error:", error.message);
     });
 
     // Case-insensitive command listener
     bot.onText(/\/(restart|check|update)/i, (msg) => {
+        console.log("📥 Received Telegram Command from:", msg.chat.id);
         const chatId = msg.chat.id.toString();
         if (TELEGRAM_CHAT_ID && chatId !== TELEGRAM_CHAT_ID) return;
         bot.sendMessage(chatId, "🔄 Manual sync initiated. Checking IP...");
@@ -182,11 +185,22 @@ async function syncIpWithSpherAAA(manualTrigger = false) {
 }
 
 // ==========================================
-// SERVER START
+// SERVER START & KEEP ALIVE MECHANISM
 // ==========================================
 app.get('/', (req, res) => res.send({ status: "Active", tracking: DDNS_DOMAIN, ip: currentKnownIp }));
+
+// Self-Ping mechanism to prevent Render from going to sleep
+const RENDER_APP_URL = process.env.RENDER_EXTERNAL_URL || `https://${process.env.RENDER_SERVICE_NAME}.onrender.com`;
+
 app.listen(port, () => {
-    notify(`🚀 Auto-Updater Started!\n📡 Tracking: ${DDNS_DOMAIN}\n⏱️ Interval: 1 Hour`);
+    notify(`🚀 Auto-Updater Started!\n📡 Tracking: ${DDNS_DOMAIN}\n⏱️ Interval: 5 Minutes`);
     syncIpWithSpherAAA();
     setInterval(syncIpWithSpherAAA, CHECK_INTERVAL_MS);
+    
+    // Built-in pinger: Hits its own URL every 10 minutes to stay awake
+    if (process.env.RENDER_EXTERNAL_URL || process.env.RENDER_SERVICE_NAME) {
+        setInterval(() => {
+            axios.get(RENDER_APP_URL).catch(() => {});
+        }, 10 * 60 * 1000);
+    }
 });
