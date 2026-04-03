@@ -1,4 +1,4 @@
-const dns = require('dns').promises;
+const { Resolver } = require('dns').promises;
 const axios = require('axios');
 const express = require('express');
 const TelegramBot = require('node-telegram-bot-api');
@@ -71,10 +71,13 @@ async function syncIpWithSpherAAA(manualTrigger = false) {
 
     let liveIp;
 
-    // 1. Check DDNS for current Om Telecom IP
+    // 1. Check DDNS (Bypassing Local Cache using Google & Cloudflare Root DNS)
     try {
-        const { address } = await dns.lookup(DDNS_DOMAIN);
-        liveIp = address;
+        const resolver = new Resolver();
+        resolver.setServers(['8.8.8.8', '1.1.1.1']); // Force Google and Cloudflare DNS
+        
+        const addresses = await resolver.resolve4(DDNS_DOMAIN);
+        liveIp = addresses[0];
         console.log(`🌐 DDNS Resolved: ${liveIp}`);
     } catch (error) {
         await notify(`⚠️ DNS Lookup Failed. Retrying later. Error: ${error.message}`, true);
