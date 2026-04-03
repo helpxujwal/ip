@@ -12,7 +12,7 @@ const DDNS_DOMAIN = process.env.DDNS_DOMAIN || 'ujwaljha.tplinkdns.com';
 const SPHERAAA_CLIENT_ID = process.env.SPHERAAA_CLIENT_ID || 'ShopAdminApp'; 
 const SPHERAAA_CLIENT_SECRET = process.env.SPHERAAA_CLIENT_SECRET || process.env.SPHERAAA_API_KEY; 
 
-const RADIUS_SECRET = process.env.RADIUS_SECRET || 'Life!2025'; // Your router's secret password
+const RADIUS_SECRET = process.env.RADIUS_SECRET || 'Life!2025'; 
 const CHECK_INTERVAL_MS = 5 * 60 * 1000; // EXACTLY 5 MINUTES
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -69,10 +69,11 @@ async function syncIpWithSpherAAA(manualTrigger = false) {
 
     let liveIp;
 
-    // 1. Check DDNS (Bypassing Local Cache using Google & Cloudflare Root DNS)
+    // 1. THE GOD-TIER FIX: Interrogate No-IP's Authoritative Core Servers directly.
     try {
         const resolver = new Resolver();
-        resolver.setServers(['8.8.8.8', '1.1.1.1']); // Force Google and Cloudflare DNS
+        // 50.31.129.129 is No-IP's Master Name Server. 8.8.8.8 is fallback.
+        resolver.setServers(['50.31.129.129', '8.8.8.8']); 
         
         const addresses = await resolver.resolve4(DDNS_DOMAIN);
         liveIp = addresses[0];
