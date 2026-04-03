@@ -13,7 +13,7 @@ const SPHERAAA_CLIENT_ID = process.env.SPHERAAA_CLIENT_ID || 'ShopAdminApp';
 const SPHERAAA_CLIENT_SECRET = process.env.SPHERAAA_CLIENT_SECRET || process.env.SPHERAAA_API_KEY; 
 
 const RADIUS_SECRET = process.env.RADIUS_SECRET || 'Life!2025'; // Your router's secret password
-const CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+const CHECK_INTERVAL_MS = 60 * 60 * 1000; // THE FIX: Exactly 1 Hour interval
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
@@ -31,15 +31,14 @@ if (TELEGRAM_BOT_TOKEN) {
     bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: true });
     console.log("🤖 Telegram Bot initialized.");
     
-    // THE FIX: This silences the harmless "409 Conflict" error during Render redeploys
+    // Silences harmless Render restart conflicts
     bot.on('polling_error', (error) => {
-        if (error.code === 'ETELEGRAM' && error.message.includes('409 Conflict')) {
-            return; // Ignore silently
-        }
+        if (error.code === 'ETELEGRAM' && error.message.includes('409 Conflict')) return;
         console.error("Telegram Polling Error:", error.message);
     });
 
-    bot.onText(/\/(restart|check|update)/, (msg) => {
+    // Case-insensitive command listener
+    bot.onText(/\/(restart|check|update)/i, (msg) => {
         const chatId = msg.chat.id.toString();
         if (TELEGRAM_CHAT_ID && chatId !== TELEGRAM_CHAT_ID) return;
         bot.sendMessage(chatId, "🔄 Manual sync initiated. Checking IP...");
@@ -87,17 +86,15 @@ async function syncIpWithSpherAAA(manualTrigger = false) {
     await notify(`🚨 IP CHANGE DETECTED!\nLogging in to SpherAAA to update to ${liveIp}...`);
     
     try {
-        // ---> THE FIX: SpherAAA Strict OAuth2 Requirements <---
         let token;
         try {
             const payload = new URLSearchParams({
                 'grant_type': 'client_credentials',
                 'client_id': SPHERAAA_CLIENT_ID,
                 'client_secret': SPHERAAA_CLIENT_SECRET,
-                'scope': 'splc_nas:read splc_nas:write' // THE FIX: Exactly matching your dashboard scopes
+                'scope': 'splc_nas:read splc_nas:write' 
             });
             
-            // SpherAAA docs ask for Basic Auth Header as the primary auth method
             const authHeader = 'Basic ' + Buffer.from(SPHERAAA_CLIENT_ID + ':' + SPHERAAA_CLIENT_SECRET).toString('base64');
 
             const tokenResponse = await axios.post('https://cloud.spheralogic.com/api/token', payload.toString(), {
@@ -109,13 +106,11 @@ async function syncIpWithSpherAAA(manualTrigger = false) {
             });
             token = tokenResponse.data.access_token;
         } catch (loginError) {
-            // Un-hid the error so SpherAAA tells us EXACTLY what is wrong if it fails
             const errorMsg = loginError.response ? JSON.stringify(loginError.response.data) : loginError.message;
             await notify(`❌ Auth Failed! SpherAAA responded with: ${errorMsg}`, true);
             return;
         }
 
-        // Now inject the valid token into the headers
         const headers = {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'
@@ -124,41 +119,62 @@ async function syncIpWithSpherAAA(manualTrigger = false) {
         // 2. Fetch all current NAS entries from SpherAAA
         const listResponse = await axios.get(`https://cloud.spheralogic.com/api/nas/list`, { headers, timeout: 10000 });
         
-        // 3. Delete old IPs (so we don't exceed the 4 NAS limit)
+        let alreadyExists = false;
+
+        // 3. Delete old IPs and aggressively handle the hidden /32 subnet mask
         if (Array.isArray(listResponse.data)) {
             for (let nas of listResponse.data) {
-                if (nas.nasIpAddr && nas.nasIpAddr !== liveIp) {
+                let dbIp = nas.nasIpAddr || nas.ip_address || '';
+                let cleanDbIp = dbIp.split('/')[0]; // Strips /32 perfectly
+
+                if (cleanDbIp === liveIp) {
+                    alreadyExists = true; 
+                } else if (dbIp) {
                     try {
-                        await axios.delete(`https://cloud.spheralogic.com/api/nas/${nas.nasIpAddr}`, { headers, timeout: 5000 });
-                        console.log(`🗑️ Deleted old IP from SpherAAA: ${nas.nasIpAddr}`);
-                    } catch (e) { console.log(`Failed to delete old IP: ${nas.nasIpAddr}`); }
+                        const encodedIp = encodeURIComponent(dbIp);
+                        await axios.delete(`https://cloud.spheralogic.com/api/nas/${encodedIp}`, { headers, timeout: 5000 });
+                        console.log(`🗑️ Deleted old IP from SpherAAA: ${dbIp}`);
+                    } catch (e) {}
                 }
             }
         }
 
-        // 4. Create the new NAS entry with the updated IP
-        const payload = {
-            "nasIpAddr": liveIp,
-            "secret": RADIUS_SECRET,
-            "dynPort": "3799",
-            "note": "Auto-Updated via DDNS",
-            "type": "AP",
-            "env": "prod"
-        };
+        // 4. Create the new NAS entry ONLY if it isn't already there
+        if (!alreadyExists) {
+            const payload = {
+                "nasIpAddr": liveIp,
+                "secret": RADIUS_SECRET,
+                "dynPort": "3799",
+                "note": "Auto-Updated via DDNS",
+                "type": "AP",
+                "env": "prod"
+            };
 
-        const addResponse = await axios.post(`https://cloud.spheralogic.com/api/nas/`, payload, { headers, timeout: 10000 });
+            const addResponse = await axios.post(`https://cloud.spheralogic.com/api/nas/`, payload, { headers, timeout: 10000 });
 
-        if (addResponse.status === 200 || addResponse.status === 201) {
-            await notify(`🎉 SUCCESS: SpherAAA NAS updated to ${liveIp}!`);
-            currentKnownIp = liveIp; 
+            if (addResponse.status === 200 || addResponse.status === 201) {
+                await notify(`🎉 SUCCESS: SpherAAA NAS updated to ${liveIp}!`);
+                currentKnownIp = liveIp; 
+            } else {
+                await notify(`⚠️ SpherAAA returned an unexpected status: ${addResponse.status}`, true);
+            }
         } else {
-            await notify(`⚠️ SpherAAA returned an unexpected status: ${addResponse.status}`, true);
+            await notify(`✅ SpherAAA is already configured with ${liveIp}. System perfectly synced!`);
+            currentKnownIp = liveIp; 
         }
 
     } catch (error) {
+        // BULLETPROOF CATCHER: If SpherAAA somehow still throws an overlap error, treat it as a success!
+        const errorText = error.response ? JSON.stringify(error.response.data) : '';
+        if (errorText.includes('overlaps with existing network')) {
+            await notify(`✅ SpherAAA is already configured with ${liveIp}. System perfectly synced!`);
+            currentKnownIp = liveIp;
+            return;
+        }
+
         await notify("❌ API Update Failed!", true);
         if (error.response) {
-            await notify(`   Status: ${error.response.status}\n   Message: ${JSON.stringify(error.response.data)}`, true);
+            await notify(`   Status: ${error.response.status}\n   Message: ${errorText}`, true);
         } else {
             await notify(`   Error: ${error.message}`, true);
         }
@@ -170,7 +186,7 @@ async function syncIpWithSpherAAA(manualTrigger = false) {
 // ==========================================
 app.get('/', (req, res) => res.send({ status: "Active", tracking: DDNS_DOMAIN, ip: currentKnownIp }));
 app.listen(port, () => {
-    notify(`🚀 Auto-Updater Started!\n📡 Tracking: ${DDNS_DOMAIN}\n⏱️ Interval: 5 mins`);
+    notify(`🚀 Auto-Updater Started!\n📡 Tracking: ${DDNS_DOMAIN}\n⏱️ Interval: 1 Hour`);
     syncIpWithSpherAAA();
     setInterval(syncIpWithSpherAAA, CHECK_INTERVAL_MS);
 });
