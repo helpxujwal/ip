@@ -13,7 +13,7 @@ const SPHERAAA_CLIENT_ID = process.env.SPHERAAA_CLIENT_ID || 'ShopAdminApp';
 const SPHERAAA_CLIENT_SECRET = process.env.SPHERAAA_CLIENT_SECRET || process.env.SPHERAAA_API_KEY; 
 
 const RADIUS_SECRET = process.env.RADIUS_SECRET || 'Life!2025'; // Your router's secret password
-const CHECK_INTERVAL_MS = 5 * 60 * 1000; // THE FIX: Changed back to exactly 5 Minutes!
+const CHECK_INTERVAL_MS = 5 * 60 * 1000; // EXACTLY 5 MINUTES
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
@@ -31,11 +31,9 @@ if (TELEGRAM_BOT_TOKEN) {
     bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: true });
     console.log("🤖 Telegram Bot initialized.");
     
-    // This silences the harmless "409 Conflict" error during Render redeploys
+    // Silences harmless Render restart conflicts
     bot.on('polling_error', (error) => {
-        if (error.code === 'ETELEGRAM' && error.message.includes('409 Conflict')) {
-            return; // Ignore silently
-        }
+        if (error.code === 'ETELEGRAM' && error.message.includes('409 Conflict')) return;
         console.error("Telegram Polling Error:", error.message);
     });
 
@@ -104,10 +102,7 @@ async function syncIpWithSpherAAA(manualTrigger = false) {
             const authHeader = 'Basic ' + Buffer.from(SPHERAAA_CLIENT_ID + ':' + SPHERAAA_CLIENT_SECRET).toString('base64');
 
             const tokenResponse = await axios.post('https://cloud.spheralogic.com/api/token', payload.toString(), {
-                headers: { 
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'Authorization': authHeader
-                },
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Authorization': authHeader },
                 timeout: 10000
             });
             token = tokenResponse.data.access_token;
@@ -117,21 +112,17 @@ async function syncIpWithSpherAAA(manualTrigger = false) {
             return;
         }
 
-        const headers = {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-        };
+        const headers = { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' };
 
         // 2. Fetch all current NAS entries from SpherAAA
         const listResponse = await axios.get(`https://cloud.spheralogic.com/api/nas/list`, { headers, timeout: 10000 });
-        
         let alreadyExists = false;
 
-        // 3. Delete old IPs and aggressively handle the hidden /32 subnet mask
+        // 3. Delete old IPs and handle the hidden /32 subnet mask perfectly
         if (Array.isArray(listResponse.data)) {
             for (let nas of listResponse.data) {
                 let dbIp = nas.nasIpAddr || nas.ip_address || '';
-                let cleanDbIp = dbIp.split('/')[0]; // Strips /32 perfectly
+                let cleanDbIp = dbIp.split('/')[0]; // Strips /32
 
                 if (cleanDbIp === liveIp) {
                     alreadyExists = true; 
@@ -151,7 +142,7 @@ async function syncIpWithSpherAAA(manualTrigger = false) {
                 "nasIpAddr": liveIp,
                 "secret": RADIUS_SECRET,
                 "dynPort": "3799",
-                "note": "Auto-Updated via DDNS",
+                "note": "Auto-Updated via Cloud",
                 "type": "AP",
                 "env": "prod"
             };
@@ -170,7 +161,7 @@ async function syncIpWithSpherAAA(manualTrigger = false) {
         }
 
     } catch (error) {
-        // BULLETPROOF CATCHER: If SpherAAA somehow still throws an overlap error, treat it as a success!
+        // BULLETPROOF CATCHER: If SpherAAA somehow throws an overlap error, treat it as a success!
         const errorText = error.response ? JSON.stringify(error.response.data) : '';
         if (errorText.includes('overlaps with existing network')) {
             await notify(`✅ SpherAAA is already configured with ${liveIp}. System perfectly synced!`);
@@ -196,7 +187,7 @@ app.get('/', (req, res) => res.send({ status: "Active", tracking: DDNS_DOMAIN, i
 const RENDER_APP_URL = process.env.RENDER_EXTERNAL_URL || `https://${process.env.RENDER_SERVICE_NAME}.onrender.com`;
 
 app.listen(port, () => {
-    notify(`🚀 Auto-Updater Started!\n📡 Tracking: ${DDNS_DOMAIN}\n⏱️ Interval: 5 Minutes`);
+    notify(`🚀 Cloud Auto-Updater Started!\n📡 Tracking: ${DDNS_DOMAIN}\n⏱️ Interval: 5 Minutes`);
     syncIpWithSpherAAA();
     setInterval(syncIpWithSpherAAA, CHECK_INTERVAL_MS);
     
